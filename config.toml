@@ -1,0 +1,137 @@
+## AAR-YA-PAAR — configuration
+## See STRATEGY.md for what each level-engine knob means.
+
+[market]
+symbol = "BTCUSDT"
+# "futures" = USD-M perpetual (fapi). Data source and execution both follow this.
+market_type = "futures"
+interval = "15m"          # EXECUTION timeframe (entries, exits, the setup)
+# The level grid is a daily structure and keeps its own timeframe. The doji rule
+# needs small candles to work: at 3m it finds valid levels on 89.3% of days, at
+# 15m only 11.5% (median 15m body is $82, so "open == close" almost never holds).
+# Set this to "15m" to build levels from 15m candles too.
+level_interval = "3m"
+anchor_interval = "15m"
+# Which candle on that timeframe is the anchor:
+#   first_session -> the candle OPENING at 05:30 (15m: 05:30-05:45); its CLOSE
+#                    is the price at 05:45. This is the 05:30 candle as labelled
+#                    on the chart, and the first completed candle of the session.
+#   pre_session   -> the candle CLOSING at 05:30 (15m: 05:15-05:30); its close
+#                    is the price AT 05:30 (identical at every timeframe).
+anchor_position = "first_session"
+margin_type = "ISOLATED"   # ISOLATED | CROSSED
+tick_size = 0.10      # PRICE_FILTER  — verified live
+step_size = 0.001     # LOT_SIZE      — verified live
+min_notional = 50.0   # MIN_NOTIONAL  — verified live
+
+[levels]
+# How a "3-minute candle with the same opening and closing price" is identified.
+# Measured over 366 days of BTCUSDT perp (run `python3 -m aar diagnose`):
+#
+#   mode          valid days   median D   grid/session-range
+#   strict            5.7%        $186          2.60
+#   tick (1t)        13.4%        $244          2.70
+#   abs 10t ($1)     44.0%        $363          2.78
+#   abs 50t ($5)     90.7%        $615          3.81
+#   adaptive         90.7%        $418          2.66   <- default
+#
+# adaptive is the default because it reaches the same coverage as a $5 fixed
+# tolerance while keeping D far tighter — it uses the SMALLEST tolerance that
+# works on each individual day rather than one loose setting for every day.
+# Set "strict" to reproduce the literal specification.
+doji_mode = "adaptive"
+doji_tol_ticks = 10
+adaptive_max_ticks = 50
+
+# Require the upper doji to reach the top half of the session range and the
+# lower doji the bottom half. Without this one candle can win both slots and
+# collapse D to zero. Turn off only to reproduce the literal spec.
+require_opposite_halves = true
+
+steps_per_side = 12      # N full-D steps each way
+# false -> only the full-D levels + anchor (2N+1 = 7 lines), no half-D midpoints
+include_midpoints = false
+min_spacing_ticks = 1   # D below this marks the day invalid
+min_session_candles = 0   # 0 = derive from interval (28 at 15m)
+
+[backtest]
+start = "2025-08-01"
+end = "2026-08-01"
+initial_equity = 1000.0
+taker_fee = 0.0005      # 0.05%
+maker_fee = 0.0002      # 0.02%
+slippage_ticks = 1      # plus slippage_bps below
+slippage_bps = 0.0
+
+# --- fee optimisation -------------------------------------------------------
+fee_discount = 0.9            # pay fees in BNB: 10% off every rate
+post_only_entry = true        # rest a GTX limit at the entry instead of crossing
+entry_ttl_candles = 2         # cancel the resting entry after N candles
+entry_buffer_seconds = 12     # place the limit N sec before candle close, not after
+post_only_through_ticks = 1   # queue proxy: price must trade THROUGH by 1 tick
+limit_target = true           # target exits as resting LIMIT (maker, no slippage)
+leverage = 40.0         # step 7
+funding_rate = 0.0001   # fallback when actual funding history is unavailable
+use_real_funding = true
+
+[strategy]
+# "null" emits no signals. "break-fade" is the 7-step execution plan.
+name = "break-fade"
+
+[strategy.break_fade]
+# Step 2: COLOUR ONLY. The break candle must be red or green and the opposite
+# candle the opposite colour. No body ratio, no wick test — only a flat candle
+# (open == close) is rejected. Both shape filters below are optional and off:
+#   max_wick_ticks = 0   -> re-enable the 100%-body / 0-wick marubozu rule
+#   body_min_pct   = 90  -> re-enable a body/range floor
+# max_wick_ticks = 0
+body_min_pct = 0.0
+ema_period = 3          # step 3
+# cross          -> break candle must open one side of the 7 EMA and close the other
+# cross_or_touch -> also accept the EMA acting as support/resistance: the candle
+#                   wicks into the EMA and closes away from it
+# touch          -> loosest: the EMA anywhere inside the candle's high-low range
+ema_mode = "cross"
+stop_usdt = 300.0       # step 5: stop distance in BTC price
+target_usdt = 2268.0    # step 5: target distance in BTC price  (R:R 1:7.56)
+# 1.5% rather than 3%: risk % cannot change fees as a SHARE of risk (both scale
+# with position size, so the ratio is a constant 16.3%), but it does control
+# volatility drag. Halving risk roughly halves return AND drawdown while
+# improving Sharpe 0.53 -> 0.72. Past 5% return actually falls; at 10% it goes
+# negative on a 91% drawdown.
+risk_pct = 1.5          # step 6: qty = (risk_pct% of balance) / stop_usdt
+opposite_within = 1     # step 4: opposite candle must be the very next candle
+# Slack on the level-cross test, in ticks ($0.10 each). 0 = exact.
+# Applies to the OPEN side only — price often opens right on a level. The CLOSE
+# must genuinely finish past the level, otherwise nothing was broken.
+level_cross_tol_ticks = 3
+# Only the anchor survived an out-of-sample split: 25.0% win rate in the first
+# half of the year, 21.1% in the second. The outer k levels are arithmetic
+# multiples with no independent meaning, and behaved like noise.
+level_kinds = "anchor"
+# Skip the first 2 London candles (12:30-13:00) — worst hour in both halves.
+skip_first_candles = 2
+# true -> "Account Balance" in the sizing formula means the CURRENT balance,
+# so position size tracks equity: qty = (balance x risk_pct%) / stop_usdt.
+# This is what the formula literally says, and it removes the margin wall that
+# refused 278 entries when size was pinned to the starting capital.
+compound = true
+
+[risk]
+risk_per_trade_pct = 1.5   # informational; break-fade sizes from its own risk_pct
+max_qty = 100.0            # hard cap in BTC; step-6 sizing must not be clipped by it
+max_trades_per_day = 1     # one trade per day, then stand down
+flatten_at_london_close = false  # hold to stop or target, no 18:30 cut
+
+[live]
+# Every code path defaults to testnet. Live requires BOTH testnet = false here
+# AND environment variable AAR_ALLOW_LIVE=1.
+testnet = true
+dry_run = true          # log intended orders, place nothing
+poll_seconds = 5
+
+[paths]
+cache_dir = "out/cache"
+levels_dir = "out/levels"
+reports_dir = "out/reports"
+charts_dir = "out/charts"

@@ -1,0 +1,27 @@
+# Market data cache — 57 MB of candle CSVs, regenerated on first run from
+# data.binance.vision. Never commit; it is a cache, not source.
+out/cache/
+
+# Generated run outputs
+out/reports/
+out/charts/
+out/levels/
+
+# Ad-hoc analysis artifacts written by verification runs
+cf_*.json
+gatelog_*.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Never commit credentials. API keys are read from environment variables only
+# (AAR_TESTNET_API_KEY / AAR_LIVE_API_KEY) — see aar/data/rest.py.
+.env
+*.key
+*.pem
